@@ -2,6 +2,7 @@ import React from 'react';
 import { Composition, type CalculateMetadataFunction } from 'remotion';
 import notesJson from '../data/notes.json';
 import {
+  PIANO_MOTION_DEFAULT_THEME,
   PianoMotionComposition,
   type PianoMotionProps,
 } from './components/PianoMotionComposition';
@@ -34,6 +35,7 @@ export const RemotionRoot: React.FC = () => {
       )}
       defaultProps={{
         data: defaultData,
+        theme: PIANO_MOTION_DEFAULT_THEME,
       }}
       calculateMetadata={calculateMetadata}
     />

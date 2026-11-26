@@ -27,16 +27,22 @@ const audioFile = audioArg ? audioArg.split('=')[1] : undefined;
 const midiBuffer = fs.readFileSync(inputPath);
 const midi = new Midi(midiBuffer);
 
-const notes = midi.tracks
-  .flatMap((track) => track.notes)
-  .filter((note) => note.midi >= 21 && note.midi <= 108)
-  .map((note) => ({
-    pitch: note.midi,
-    name: note.name,
-    startTime: Number(note.time.toFixed(4)),
-    endTime: Number((note.time + note.duration).toFixed(4)),
-    velocity: Number(Math.min(Math.max(note.velocity, 0), 1).toFixed(3)),
-  }))
+const nonEmptyTracks = midi.tracks.filter((track) => track.notes.length > 0);
+const isMultiTrack = nonEmptyTracks.length > 1;
+
+const notes = nonEmptyTracks
+  .flatMap((track, trackIdx) =>
+    track.notes
+      .filter((note) => note.midi >= 21 && note.midi <= 108)
+      .map((note) => ({
+        pitch: note.midi,
+        name: note.name,
+        startTime: Number(note.time.toFixed(4)),
+        endTime: Number((note.time + note.duration).toFixed(4)),
+        velocity: Number(Math.min(Math.max(note.velocity, 0), 1).toFixed(3)),
+        ...(isMultiTrack ? { track: trackIdx } : {}),
+      }))
+  )
   .sort((a, b) => a.startTime - b.startTime || a.pitch - b.pitch);
 
 const maxEndTime = notes.reduce((max, n) => Math.max(max, n.endTime), 0);

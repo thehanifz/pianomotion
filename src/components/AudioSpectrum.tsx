@@ -12,7 +12,7 @@ interface AudioSpectrumProps {
 export const AudioSpectrum: React.FC<AudioSpectrumProps> = ({
   audioSrc,
   width,
-  height = 150,
+  height = 120,
   barCount = 64,
 }) => {
   const frame = useCurrentFrame();
@@ -39,7 +39,6 @@ export const AudioSpectrum: React.FC<AudioSpectrumProps> = ({
     smoothing: true,
   });
 
-  // Logarithmic frequency mapping (55 Hz -> 5200 Hz) matching piano pitch spread A0..C8
   const nyquist = audioData.sampleRate / 2;
   const minFreq = 55;
   const maxFreq = Math.min(5200, nyquist * 0.9);
@@ -61,15 +60,14 @@ export const AudioSpectrum: React.FC<AudioSpectrumProps> = ({
       }
     }
 
-    // Gentle high-frequency tilt compensation so upper-register melody notes stay visible
     const ratio = i / Math.max(barCount - 1, 1);
     const tilt = 1 + ratio * 2.2;
-    const boosted = Math.pow(Math.min(peak * 2.4 * tilt, 1), 0.72);
+    const boosted = Math.pow(Math.min(peak * 2.2 * tilt, 1), 0.72);
     bars.push(boosted);
   }
 
   const stepWidth = width / bars.length;
-  const barWidth = Math.max(3, stepWidth * 0.42);
+  const barWidth = Math.max(3, stepWidth * 0.4);
 
   return (
     <div
@@ -89,12 +87,14 @@ export const AudioSpectrum: React.FC<AudioSpectrumProps> = ({
       }}
     >
       {bars.map((normalized, index) => {
-        const barHeight = Math.max(3, normalized * height);
+        const barHeight = Math.max(2, normalized * height);
         const ratio = index / Math.max(bars.length - 1, 1);
         const barColor =
-          ratio < 0.52
-            ? 'rgba(56, 189, 248, 0.36)'
-            : 'rgba(168, 85, 247, 0.34)';
+          ratio < 0.34
+            ? 'rgba(99, 102, 241, 0.28)'
+            : ratio < 0.7
+            ? 'rgba(56, 189, 248, 0.26)'
+            : 'rgba(244, 114, 182, 0.26)';
 
         return (
           <div
@@ -104,7 +104,7 @@ export const AudioSpectrum: React.FC<AudioSpectrumProps> = ({
               height: barHeight,
               borderTopLeftRadius: barWidth / 2,
               borderTopRightRadius: barWidth / 2,
-              background: `linear-gradient(180deg, ${barColor} 0%, rgba(56, 189, 248, 0.04) 100%)`,
+              background: `linear-gradient(180deg, ${barColor} 0%, rgba(56, 189, 248, 0.03) 100%)`,
             }}
           />
         );

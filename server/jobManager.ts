@@ -6,13 +6,23 @@ import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { renderMedia, selectComposition } from '@remotion/renderer';
 import { Midi } from '@tonejs/midi';
-import type { NoteEvent, NotesData } from '../src/types/notes';
+import type {
+  BackgroundMode,
+  BackgroundPreset,
+  KeyboardRangeMode,
+  NoteEvent,
+  NotesData,
+  PianoMotionThemeConfig,
+  WatermarkPosition,
+} from '../src/types/notes';
 import {
   BROWSER_TRANSCODE_EXTENSIONS,
+  DEFAULTS_DIR,
   ENTRY_POINT,
   JOBS_DIR,
   PORT,
   SUPPORTED_AUDIO_EXTENSIONS,
+  SUPPORTED_IMAGE_EXTENSIONS,
   SUPPORTED_MIDI_EXTENSIONS,
   TRANSCRIBE_SCRIPT,
   resolveChromiumOptions,
@@ -53,6 +63,43 @@ export interface NoteStats {
   durationInSeconds: number;
 }
 
+export type JobThemeSettings = Pick<
+  PianoMotionThemeConfig,
+  | 'keyboardRangeMode'
+  | 'watermarkText'
+  | 'watermarkPosition'
+  | 'watermarkOpacity'
+  | 'backgroundMode'
+  | 'backgroundPreset'
+  | 'backgroundColor'
+  | 'backgroundDim'
+  | 'backgroundBlur'
+  | 'enableParticles'
+  | 'enableDust'
+  | 'enableSpectrum'
+  | 'enableBreathingBg'
+  | 'enableChordDetection'
+  | 'showActiveHud'
+>;
+
+export const DEFAULT_JOB_THEME: JobThemeSettings = {
+  keyboardRangeMode: 'auto',
+  watermarkText: '',
+  watermarkPosition: 'bottom-right',
+  watermarkOpacity: 0.72,
+  backgroundMode: 'preset',
+  backgroundPreset: 'midnight-navy',
+  backgroundColor: '#0a101f',
+  backgroundDim: 0.62,
+  backgroundBlur: 4,
+  enableParticles: true,
+  enableDust: true,
+  enableSpectrum: true,
+  enableBreathingBg: true,
+  enableChordDetection: true,
+  showActiveHud: true,
+};
+
 export interface JobRecord {
   id: string;
   originalName: string;
@@ -60,6 +107,8 @@ export interface JobRecord {
   inputType: 'audio' | 'midi';
   inputFileName: string;
   playableAudioFileName: string | null;
+  backgroundImageFile: string | null;
+  watermarkLogoFile: string | null;
   stage: JobStage;
   queuedAction: 'transcribe' | 'render' | null;
   progress: number;
@@ -68,6 +117,7 @@ export interface JobRecord {
   createdAt: string;
   updatedAt: string;
   settings: SensitivitySettings;
+  theme: JobThemeSettings;
   lastModelThresholds: {
     onsetThreshold: number;
     frameThreshold: number;
@@ -108,6 +158,91 @@ export function normalizeSettings(raw: Partial<SensitivitySettings> | undefined)
     minDuration: clampNumber(raw?.minDuration, 0, 1, DEFAULT_SENSITIVITY.minDuration),
     maxDuration,
   };
+}
+
+const VALID_WATERMARK_POSITIONS = new Set<WatermarkPosition>([
+  'bottom-right',
+  'bottom-left',
+  'top-right',
+  'top-left',
+  'center-stage',
+  'random-drift',
+]);
+
+const VALID_BG_MODES = new Set<BackgroundMode>(['preset', 'custom-color', 'image']);
+
+const VALID_BG_PRESETS = new Set<BackgroundPreset>([
+  'midnight-navy',
+  'warm-espresso',
+  'deep-forest',
+  'velvet-plum',
+  'pure-obsidian',
+]);
+
+const VALID_RANGE_MODES = new Set<KeyboardRangeMode>(['auto', '49', '61', '76', '88']);
+
+export function normalizeTheme(
+  raw: Partial<JobThemeSettings> | undefined,
+  base: JobThemeSettings = DEFAULT_JOB_THEME
+): JobThemeSettings {
+  const wmPos = VALID_WATERMARK_POSITIONS.has(raw?.watermarkPosition as WatermarkPosition)
+    ? (raw!.watermarkPosition as WatermarkPosition)
+    : base.watermarkPosition;
+  const bgMode = VALID_BG_MODES.has(raw?.backgroundMode as BackgroundMode)
+    ? (raw!.backgroundMode as BackgroundMode)
+    : base.backgroundMode;
+  const bgPreset = VALID_BG_PRESETS.has(raw?.backgroundPreset as BackgroundPreset)
+    ? (raw!.backgroundPreset as BackgroundPreset)
+    : base.backgroundPreset;
+  const rangeMode = VALID_RANGE_MODES.has(raw?.keyboardRangeMode as KeyboardRangeMode)
+    ? (raw!.keyboardRangeMode as KeyboardRangeMode)
+    : base.keyboardRangeMode;
+
+  const rawColor = typeof raw?.backgroundColor === 'string' ? raw.backgroundColor.trim() : '';
+  const backgroundColor = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : base.backgroundColor;
+
+  const watermarkText =
+    typeof raw?.watermarkText === 'string'
+      ? raw.watermarkText.slice(0, 80)
+      : base.watermarkText;
+
+  return {
+    keyboardRangeMode: rangeMode,
+    watermarkText,
+    watermarkPosition: wmPos,
+    watermarkOpacity: clampNumber(raw?.watermarkOpacity, 0.1, 1, base.watermarkOpacity),
+    backgroundMode: bgMode,
+    backgroundPreset: bgPreset,
+    backgroundColor,
+    backgroundDim: clampNumber(raw?.backgroundDim, 0, 0.95, base.backgroundDim),
+    backgroundBlur: clampNumber(raw?.backgroundBlur, 0, 24, base.backgroundBlur),
+    enableParticles:
+      typeof raw?.enableParticles === 'boolean' ? raw.enableParticles : base.enableParticles,
+    enableDust: typeof raw?.enableDust === 'boolean' ? raw.enableDust : base.enableDust,
+    enableSpectrum:
+      typeof raw?.enableSpectrum === 'boolean' ? raw.enableSpectrum : base.enableSpectrum,
+    enableBreathingBg:
+      typeof raw?.enableBreathingBg === 'boolean' ? raw.enableBreathingBg : base.enableBreathingBg,
+    enableChordDetection:
+      typeof raw?.enableChordDetection === 'boolean'
+        ? raw.enableChordDetection
+        : base.enableChordDetection,
+    showActiveHud:
+      typeof raw?.showActiveHud === 'boolean' ? raw.showActiveHud : base.showActiveHud,
+  };
+}
+
+function moveOrCopyFile(srcPath: string, destPath: string) {
+  try {
+    fs.renameSync(srcPath, destPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+      fs.copyFileSync(srcPath, destPath);
+      fs.unlinkSync(srcPath);
+    } else {
+      throw err;
+    }
+  }
 }
 
 function computeStats(notes: NoteEvent[], durationInSeconds: number): NoteStats {
@@ -179,13 +314,14 @@ class JobManager {
 
   constructor() {
     fs.mkdirSync(JOBS_DIR, { recursive: true });
+    fs.mkdirSync(DEFAULTS_DIR, { recursive: true });
     this.loadExistingJobs();
   }
 
   private loadExistingJobs() {
     const entries = fs.readdirSync(JOBS_DIR, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory()) {
+      if (!entry.isDirectory() || entry.name.startsWith('_')) {
         continue;
       }
       const metaPath = path.join(JOBS_DIR, entry.name, 'meta.json');
@@ -193,7 +329,13 @@ class JobManager {
         continue;
       }
       try {
-        const job = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as JobRecord;
+        const rawJob = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as JobRecord;
+        const job: JobRecord = {
+          ...rawJob,
+          backgroundImageFile: rawJob.backgroundImageFile ?? null,
+          watermarkLogoFile: rawJob.watermarkLogoFile ?? null,
+          theme: normalizeTheme(rawJob.theme),
+        };
         if (job.stage === 'queued' || job.stage === 'transcribing' || job.stage === 'rendering') {
           job.stage = job.hasNotes ? 'ready' : 'failed';
           job.queuedAction = null;
@@ -286,10 +428,127 @@ class JobManager {
     return fs.existsSync(videoPath) ? videoPath : null;
   }
 
+  private findAssetFile(dir: string, prefix: 'background' | 'logo'): string | null {
+    if (!fs.existsSync(dir)) return null;
+    for (const entry of fs.readdirSync(dir)) {
+      if (entry.startsWith(`${prefix}.`)) {
+        const ext = path.extname(entry).toLowerCase();
+        if (SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+          return entry;
+        }
+      }
+    }
+    return null;
+  }
+
+  private clearAssetFiles(dir: string, prefix: 'background' | 'logo') {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir)) {
+      if (entry.startsWith(`${prefix}.`)) {
+        fs.rmSync(path.join(dir, entry), { force: true });
+      }
+    }
+  }
+
+  getDefaultAssetPath(kind: 'background' | 'logo'): string | null {
+    const file = this.findAssetFile(DEFAULTS_DIR, kind);
+    return file ? path.join(DEFAULTS_DIR, file) : null;
+  }
+
+  getJobAssetPath(jobId: string, kind: 'background' | 'logo'): string | null {
+    const job = this.jobs.get(jobId);
+    if (!job) return null;
+    const fileName = kind === 'background' ? job.backgroundImageFile : job.watermarkLogoFile;
+    if (!fileName) return null;
+    const full = path.join(this.jobDir(jobId), fileName);
+    return fs.existsSync(full) ? full : null;
+  }
+
+  updateJobTheme(jobId: string, rawTheme: Partial<JobThemeSettings>): JobRecord {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      throw new Error('Job tidak ditemukan');
+    }
+    job.theme = normalizeTheme(rawTheme, job.theme);
+    this.saveMeta(job);
+    return job;
+  }
+
+  setJobAsset(
+    jobId: string,
+    kind: 'background' | 'logo',
+    tempFilePath: string,
+    originalName: string,
+    saveAsDefault = true
+  ): JobRecord {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      fs.rmSync(tempFilePath, { force: true });
+      throw new Error('Job tidak ditemukan');
+    }
+
+    const ext = path.extname(originalName).toLowerCase();
+    if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+      fs.rmSync(tempFilePath, { force: true });
+      throw new Error(`Format gambar tidak didukung: ${ext || 'unknown'}`);
+    }
+
+    const dir = this.jobDir(jobId);
+    this.clearAssetFiles(dir, kind);
+    const fileName = `${kind}-${Date.now()}${ext}`;
+    const destPath = path.join(dir, fileName);
+    moveOrCopyFile(tempFilePath, destPath);
+
+    if (kind === 'background') {
+      job.backgroundImageFile = fileName;
+      job.theme = normalizeTheme({ backgroundMode: 'image' }, job.theme);
+    } else {
+      job.watermarkLogoFile = fileName;
+    }
+
+    if (saveAsDefault) {
+      this.clearAssetFiles(DEFAULTS_DIR, kind);
+      fs.copyFileSync(destPath, path.join(DEFAULTS_DIR, `${kind}${ext}`));
+    }
+
+    this.saveMeta(job);
+    return job;
+  }
+
+  deleteJobAsset(
+    jobId: string,
+    kind: 'background' | 'logo',
+    alsoClearDefault = true
+  ): JobRecord {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      throw new Error('Job tidak ditemukan');
+    }
+
+    this.clearAssetFiles(this.jobDir(jobId), kind);
+    if (kind === 'background') {
+      job.backgroundImageFile = null;
+      if (job.theme.backgroundMode === 'image') {
+        job.theme = normalizeTheme({ backgroundMode: 'preset' }, job.theme);
+      }
+    } else {
+      job.watermarkLogoFile = null;
+    }
+
+    if (alsoClearDefault) {
+      this.clearAssetFiles(DEFAULTS_DIR, kind);
+    }
+
+    this.saveMeta(job);
+    return job;
+  }
+
   async createJob(
     tempFilePath: string,
     originalName: string,
-    settings: SensitivitySettings
+    settings: SensitivitySettings,
+    rawTheme?: Partial<JobThemeSettings>,
+    inheritDefaultAssets = true
   ): Promise<JobRecord> {
     const ext = path.extname(originalName).toLowerCase();
     const isMidi = SUPPORTED_MIDI_EXTENSIONS.has(ext);
@@ -307,14 +566,30 @@ class JobManager {
     const inputFileName = `input${ext}`;
     const destPath = path.join(dir, inputFileName);
     try {
-      fs.renameSync(tempFilePath, destPath);
+      moveOrCopyFile(tempFilePath, destPath);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
-        fs.copyFileSync(tempFilePath, destPath);
-        fs.unlinkSync(tempFilePath);
-      } else {
-        fs.rmSync(dir, { recursive: true, force: true });
-        throw err;
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw err;
+    }
+
+    let backgroundImageFile: string | null = null;
+    let watermarkLogoFile: string | null = null;
+    const normalizedTheme = normalizeTheme(rawTheme);
+
+    if (inheritDefaultAssets) {
+      if (normalizedTheme.backgroundMode === 'image') {
+        const defBg = this.getDefaultAssetPath('background');
+        if (defBg) {
+          const bgExt = path.extname(defBg).toLowerCase();
+          backgroundImageFile = `background${bgExt}`;
+          fs.copyFileSync(defBg, path.join(dir, backgroundImageFile));
+        }
+      }
+      const defLogo = this.getDefaultAssetPath('logo');
+      if (defLogo) {
+        const logoExt = path.extname(defLogo).toLowerCase();
+        watermarkLogoFile = `logo${logoExt}`;
+        fs.copyFileSync(defLogo, path.join(dir, watermarkLogoFile));
       }
     }
 
@@ -328,6 +603,8 @@ class JobManager {
       inputType: isMidi ? 'midi' : 'audio',
       inputFileName,
       playableAudioFileName: isAudio ? inputFileName : null,
+      backgroundImageFile,
+      watermarkLogoFile,
       stage: 'queued',
       queuedAction: 'transcribe',
       progress: 0,
@@ -336,6 +613,7 @@ class JobManager {
       createdAt: now,
       updatedAt: now,
       settings,
+      theme: normalizedTheme,
       lastModelThresholds: null,
       stats: null,
       hasNotes: false,
@@ -486,8 +764,11 @@ class JobManager {
     const midiBuffer = fs.readFileSync(midiPath);
     const midi = new Midi(midiBuffer);
 
+    const nonEmptyTracks = midi.tracks.filter((track) => track.notes.length > 0);
+    const isMultiTrack = nonEmptyTracks.length > 1;
     const notes: NoteEvent[] = [];
-    for (const track of midi.tracks) {
+
+    nonEmptyTracks.forEach((track, trackIdx) => {
       for (const note of track.notes) {
         if (note.midi < 21 || note.midi > 108) {
           continue;
@@ -508,9 +789,10 @@ class JobManager {
           startTime: Number(startTime.toFixed(4)),
           endTime: Number(endTime.toFixed(4)),
           velocity: Number(velocity.toFixed(3)),
+          ...(isMultiTrack ? { track: trackIdx } : {}),
         });
       }
-    }
+    });
 
     notes.sort((a, b) => a.startTime - b.startTime || a.pitch - b.pitch);
     const maxEnd = notes.reduce((acc, n) => Math.max(acc, n.endTime), 0);
@@ -708,7 +990,16 @@ class JobManager {
       };
 
       const serveUrl = await this.getServeUrl();
-      const inputProps = { data: renderData };
+      const renderTheme: Partial<PianoMotionThemeConfig> = {
+        ...job.theme,
+        backgroundImageUrl: job.backgroundImageFile
+          ? `http://127.0.0.1:${PORT}/api/jobs/${job.id}/assets/background`
+          : null,
+        watermarkLogoUrl: job.watermarkLogoFile
+          ? `http://127.0.0.1:${PORT}/api/jobs/${job.id}/assets/logo`
+          : null,
+      };
+      const inputProps = { data: renderData, theme: renderTheme };
       const chromiumOptions = resolveChromiumOptions();
       const concurrency = resolveRemotionConcurrency();
       const composition = await selectComposition({

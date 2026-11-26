@@ -38,6 +38,7 @@ function loadEnvFile(envPath: string): void {
 loadEnvFile(path.resolve(ROOT_DIR, '.env'));
 
 export const JOBS_DIR = path.resolve(ROOT_DIR, 'jobs');
+export const DEFAULTS_DIR = path.resolve(JOBS_DIR, '_defaults');
 export const DIST_WEB_DIR = path.resolve(ROOT_DIR, 'dist', 'web');
 export const ENTRY_POINT = path.resolve(ROOT_DIR, 'src', 'index.ts');
 export const TRANSCRIBE_SCRIPT = path.resolve(ROOT_DIR, 'scripts', 'transcribe.py');
@@ -58,6 +59,14 @@ export const SUPPORTED_AUDIO_EXTENSIONS = new Set([
 ]);
 
 export const SUPPORTED_MIDI_EXTENSIONS = new Set(['.mid', '.midi']);
+
+export const SUPPORTED_IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.svg',
+]);
 
 export const BROWSER_TRANSCODE_EXTENSIONS = new Set(['.aac', '.wma']);
 

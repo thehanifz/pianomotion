@@ -8,10 +8,16 @@ import {
   JOBS_DIR,
   PORT,
   SUPPORTED_AUDIO_EXTENSIONS,
+  SUPPORTED_IMAGE_EXTENSIONS,
   SUPPORTED_MIDI_EXTENSIONS,
   resolvePythonBin,
 } from './config';
-import { jobManager, normalizeSettings, type SensitivitySettings } from './jobManager';
+import {
+  jobManager,
+  normalizeSettings,
+  type JobThemeSettings,
+  type SensitivitySettings,
+} from './jobManager';
 
 const app = express();
 app.use(express.json());
@@ -22,7 +28,14 @@ fs.mkdirSync(uploadTempDir, { recursive: true });
 const upload = multer({
   dest: uploadTempDir,
   limits: {
-    fileSize: 250 * 1024 * 1024, // 250 MB max
+    fileSize: 250 * 1024 * 1024, // 250 MB max for audio/MIDI
+  },
+});
+
+const imageUpload = multer({
+  dest: uploadTempDir,
+  limits: {
+    fileSize: 15 * 1024 * 1024, // 15 MB max for background/logo images
   },
 });
 
@@ -34,6 +47,13 @@ function sanitizeDownloadName(name: string, ext: string): string {
   return `${base || 'pianomotion'}${ext}`;
 }
 
+function parseAssetKind(raw: unknown): 'background' | 'logo' | null {
+  if (raw === 'background' || raw === 'logo') {
+    return raw;
+  }
+  return null;
+}
+
 app.get('/api/health', (_req, res) => {
   const pythonBin = resolvePythonBin();
   res.json({
@@ -41,10 +61,15 @@ app.get('/api/health', (_req, res) => {
     platform: process.platform,
     pythonBin,
     queue: jobManager.getQueueInfo(),
+    defaults: {
+      hasBackgroundImage: Boolean(jobManager.getDefaultAssetPath('background')),
+      hasWatermarkLogo: Boolean(jobManager.getDefaultAssetPath('logo')),
+    },
     supportedExtensions: [
       ...Array.from(SUPPORTED_AUDIO_EXTENSIONS),
       ...Array.from(SUPPORTED_MIDI_EXTENSIONS),
     ],
+    supportedImageExtensions: Array.from(SUPPORTED_IMAGE_EXTENSIONS),
   });
 });
 
@@ -98,17 +123,110 @@ app.post('/api/jobs', upload.single('file'), async (req, res) => {
     if (typeof req.body?.settings === 'string') {
       rawSettings = JSON.parse(req.body.settings) as Partial<SensitivitySettings>;
     }
+    let rawTheme: Partial<JobThemeSettings> | undefined;
+    if (typeof req.body?.theme === 'string') {
+      rawTheme = JSON.parse(req.body.theme) as Partial<JobThemeSettings>;
+    }
+    const inheritDefaultAssets = req.body?.inheritDefaultAssets !== 'false';
+
     const settings = normalizeSettings(rawSettings);
     const job = await jobManager.createJob(
       req.file.path,
       req.file.originalname,
-      settings
+      settings,
+      rawTheme,
+      inheritDefaultAssets
     );
     res.status(201).json({ job });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(400).json({ error: message });
   }
+});
+
+app.put('/api/jobs/:id/theme', (req, res) => {
+  try {
+    const job = jobManager.updateJobTheme(
+      req.params.id,
+      req.body as Partial<JobThemeSettings>
+    );
+    res.json({ job });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/jobs/:id/assets', imageUpload.single('file'), (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: 'File gambar wajib dipilih' });
+    return;
+  }
+  const kind = parseAssetKind(req.body?.kind);
+  if (!kind) {
+    fs.rmSync(req.file.path, { force: true });
+    res.status(400).json({ error: 'Parameter kind harus background atau logo' });
+    return;
+  }
+  const saveAsDefault = req.body?.saveAsDefault !== 'false';
+
+  try {
+    const job = jobManager.setJobAsset(
+      String(req.params.id),
+      kind,
+      req.file.path,
+      req.file.originalname,
+      saveAsDefault
+    );
+    res.json({ job });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(400).json({ error: message });
+  }
+});
+
+app.get('/api/jobs/:id/assets/:kind', (req, res) => {
+  const kind = parseAssetKind(req.params.kind);
+  if (!kind) {
+    res.status(400).json({ error: 'Jenis aset tidak valid' });
+    return;
+  }
+  const assetPath = jobManager.getJobAssetPath(req.params.id, kind);
+  if (!assetPath) {
+    res.status(404).json({ error: 'Aset gambar tidak ditemukan' });
+    return;
+  }
+  res.sendFile(assetPath);
+});
+
+app.delete('/api/jobs/:id/assets/:kind', (req, res) => {
+  const kind = parseAssetKind(req.params.kind);
+  if (!kind) {
+    res.status(400).json({ error: 'Jenis aset tidak valid' });
+    return;
+  }
+  try {
+    const clearDefault = req.query.clearDefault !== 'false';
+    const job = jobManager.deleteJobAsset(req.params.id, kind, clearDefault);
+    res.json({ job });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(400).json({ error: message });
+  }
+});
+
+app.get('/api/defaults/assets/:kind', (req, res) => {
+  const kind = parseAssetKind(req.params.kind);
+  if (!kind) {
+    res.status(400).json({ error: 'Jenis aset tidak valid' });
+    return;
+  }
+  const assetPath = jobManager.getDefaultAssetPath(kind);
+  if (!assetPath) {
+    res.status(404).json({ error: 'Default aset belum diset' });
+    return;
+  }
+  res.sendFile(assetPath);
 });
 
 app.post('/api/jobs/:id/reprocess', (req, res) => {
@@ -174,14 +292,15 @@ app.delete('/api/jobs/:id', (req, res) => {
   }
 });
 
-// Serve built Vite frontend in production mode
+// Serve built Vite frontend in production mode (no-store on index.html so UI rebuilds apply on refresh)
 if (fs.existsSync(DIST_WEB_DIR)) {
-  app.use(express.static(DIST_WEB_DIR));
+  app.use(express.static(DIST_WEB_DIR, { index: false }));
   app.get('/{*splat}', (req, res, next) => {
     if (req.path.startsWith('/api/')) {
       next();
       return;
     }
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.join(DIST_WEB_DIR, 'index.html'));
   });
 }
