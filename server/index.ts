@@ -54,6 +54,21 @@ function parseAssetKind(raw: unknown): 'background' | 'logo' | null {
   return null;
 }
 
+const mediaCors: express.RequestHandler = (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    'Content-Range, Accept-Ranges, Content-Length'
+  );
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+};
+
 app.get('/api/health', (_req, res) => {
   const pythonBin = resolvePythonBin();
   res.json({
@@ -185,13 +200,14 @@ app.post('/api/jobs/:id/assets', imageUpload.single('file'), (req, res) => {
   }
 });
 
-app.get('/api/jobs/:id/assets/:kind', (req, res) => {
+app.options('/api/jobs/:id/assets/:kind', mediaCors);
+app.get('/api/jobs/:id/assets/:kind', mediaCors, (req, res) => {
   const kind = parseAssetKind(req.params.kind);
   if (!kind) {
     res.status(400).json({ error: 'Jenis aset tidak valid' });
     return;
   }
-  const assetPath = jobManager.getJobAssetPath(req.params.id, kind);
+  const assetPath = jobManager.getJobAssetPath(String(req.params.id), kind);
   if (!assetPath) {
     res.status(404).json({ error: 'Aset gambar tidak ditemukan' });
     return;
@@ -259,8 +275,9 @@ app.get('/api/jobs/:id/notes', (req, res) => {
   res.json(data);
 });
 
-app.get('/api/jobs/:id/audio', (req, res) => {
-  const audioPath = jobManager.getPlayableAudioPath(req.params.id);
+app.options('/api/jobs/:id/audio', mediaCors);
+app.get('/api/jobs/:id/audio', mediaCors, (req, res) => {
+  const audioPath = jobManager.getPlayableAudioPath(String(req.params.id));
   if (!audioPath) {
     res.status(404).json({ error: 'Audio tidak tersedia untuk job ini' });
     return;
